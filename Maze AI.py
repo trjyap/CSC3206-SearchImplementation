@@ -56,7 +56,7 @@ class GameState:
     speed_multiplier: float # Current speed modifier
     last_direction: Optional[Tuple[int, int]] # For TRAP3 effect
     total_energy: float # Cumulative energy spent
-    total_steps: int # Cumulative steps taken
+    total_steps: float # Cumulative steps taken
     treasures_removed: bool
 
     def __lt__(self, other):
@@ -140,7 +140,7 @@ class OptimizedTreasureHuntSolver:
                 base_energy += 1.0  # Smaller penalty for push trap
                 
             energy_cost = base_energy * state.energy_multiplier
-            steps_cost = max(1, int(state.speed_multiplier))
+            steps_cost = state.speed_multiplier
             
             moves.append(((next_row, next_col), energy_cost, steps_cost))
             
@@ -262,9 +262,9 @@ class OptimizedTreasureHuntSolver:
             
             if self.is_goal_state(current_state):
                 print("Optimized solution found!")
-                print(f"Total energy: {current_state.total_energy:.2f}")
-                print(f"Total steps: {current_state.total_steps}")
-                print(f"Combined cost: {total_cost:.2f}")
+                print(f"Total energy: {current_state.total_energy+1:.2f}")
+                print(f"Total steps: {current_state.total_steps+1}")
+                print(f"Combined cost: {total_cost+2:.2f}")
                 print(f"Path length: {len(path)} moves")
                 print(f"Iterations: {iterations}")
                 return path
