@@ -6,17 +6,17 @@ from dataclasses import dataclass
 from typing import List, Tuple, Optional, Set
 import copy
 
-# Initialize Pygame
+# Initialize Pygame for visualization
 pygame.init()
 
-# Constants
+# Constants for window and grid size
 WINDOW_WIDTH = 800
 WINDOW_HEIGHT = 600
 HEX_RADIUS = 30
 GRID_WIDTH = 10
 GRID_HEIGHT = 6
 
-# Colors
+# Color definitions for different cell types and UI
 COLORS = {
     'WHITE': (255, 255, 255),
     'BLACK': (0, 0, 0),
@@ -35,6 +35,7 @@ COLORS = {
     'LIGHT_GREEN': (144, 238, 144)
 }
 
+# Enum for different types of cells in the grid
 class CellType(Enum):
     EMPTY = 0
     OBSTACLE = 1
@@ -47,21 +48,24 @@ class CellType(Enum):
     TREASURE = 8
     ENTRY = 9
 
+# Dataclass to represent the state of the agent in the search
 @dataclass
 class GameState:
-    position: Tuple[int, int]   # Current location
-    collected_treasures: Set[Tuple[int, int]] # Treasures gathered
-    collected_rewards: Set[Tuple[int, int]] # Rewards gathered
-    energy_multiplier: float # Current energy cost modifier
-    speed_multiplier: float # Current speed modifier
-    last_direction: Optional[Tuple[int, int]] # For TRAP3 effect
-    total_energy: float # Cumulative energy spent
-    total_steps: int # Cumulative steps taken
-    treasures_removed: bool
+    position: Tuple[int, int]   # Current location of the agent
+    collected_treasures: Set[Tuple[int, int]] # Treasures collected so far
+    collected_rewards: Set[Tuple[int, int]]   # Rewards collected so far
+    energy_multiplier: float    # Current energy cost modifier
+    speed_multiplier: float     # Current speed modifier
+    last_direction: Optional[Tuple[int, int]] # Last move direction (for TRAP3)
+    total_energy: float         # Total energy spent so far
+    total_steps: int            # Total steps taken so far
+    treasures_removed: bool     # If TRAP4 was triggered
 
     def __lt__(self, other):
+        # For priority queue: compare by combined cost (energy + steps)
         return (self.total_energy + self.total_steps) < (other.total_energy + other.total_steps)
 
+# Main solver class for the treasure hunt problem
 class OptimizedTreasureHuntSolver:
     def __init__(self, grid):
         self.grid = grid
@@ -69,7 +73,7 @@ class OptimizedTreasureHuntSolver:
         self.all_rewards = copy.deepcopy(grid.rewards)
         
     def hex_distance(self, pos1: Tuple[int, int], pos2: Tuple[int, int]) -> int:
-        """Calculate hexagonal distance between two positions"""
+        """Calculate hexagonal distance between two positions using cube coordinates"""
         r1, c1 = pos1
         r2, c2 = pos2
         
@@ -86,12 +90,12 @@ class OptimizedTreasureHuntSolver:
         return (abs(x1 - x2) + abs(y1 - y2) + abs(z1 - z2)) // 2
     
     def apply_trap_effect(self, state: GameState, trap_type: CellType) -> GameState:
-        """Apply the effect of stepping on a trap"""
+        """Apply the effect of stepping on a trap and return the new state"""
         new_state = copy.deepcopy(state)
         
-        if trap_type == CellType.TRAP1:  # Increase gravity
+        if trap_type == CellType.TRAP1:  # Increase gravity (energy cost)
             new_state.energy_multiplier *= 2
-        elif trap_type == CellType.TRAP2:  # Decrease speed
+        elif trap_type == CellType.TRAP2:  # Decrease speed (step cost)
             new_state.speed_multiplier *= 2
         elif trap_type == CellType.TRAP3:  # Move 2 cells in last direction
             if new_state.last_direction:
@@ -109,12 +113,12 @@ class OptimizedTreasureHuntSolver:
         return new_state
     
     def apply_reward_effect(self, state: GameState, reward_type: CellType) -> GameState:
-        """Apply the effect of stepping on a reward"""
+        """Apply the effect of stepping on a reward and return the new state"""
         new_state = copy.deepcopy(state)
         
-        if reward_type == CellType.REWARD1:  # Decrease gravity
+        if reward_type == CellType.REWARD1:  # Decrease gravity (energy cost)
             new_state.energy_multiplier = max(0.25, new_state.energy_multiplier * 0.5)
-        elif reward_type == CellType.REWARD2:  # Increase speed
+        elif reward_type == CellType.REWARD2:  # Increase speed (step cost)
             new_state.speed_multiplier = max(0.25, new_state.speed_multiplier * 0.5)
             
         return new_state
@@ -134,7 +138,7 @@ class OptimizedTreasureHuntSolver:
             if cell_type == CellType.OBSTACLE:
                 continue
 
-            # Normal movement cost
+            # Normal movement cost (energy and steps)
             base_energy = 1.0
             energy_cost = base_energy * state.energy_multiplier
             steps_cost = max(1, int(state.speed_multiplier))
@@ -144,7 +148,11 @@ class OptimizedTreasureHuntSolver:
         return moves
     
     def heuristic(self, state: GameState) -> float:
-        """Improved heuristic function that considers strategic value"""
+        """
+        Heuristic function for A*:
+        - Estimates cost to collect all remaining treasures and rewards.
+        - Favors rewards if convenient, penalizes bad multipliers.
+        """
         uncollected_treasures = self.all_treasures - state.collected_treasures
         uncollected_rewards = self.all_rewards - state.collected_rewards
         
@@ -158,34 +166,30 @@ class OptimizedTreasureHuntSolver:
         
         current_pos = state.position
         
-        # Calculate minimum spanning tree cost approximation
+        # If only one item left, just return distance to it
         if len(all_uncollected) == 1:
             target = next(iter(all_uncollected))
             return self.hex_distance(current_pos, target) * state.energy_multiplier
         
-        # For multiple targets, use improved estimation
+        # For multiple targets, estimate cost to reach all
         distances = []
         for target in all_uncollected:
             dist = self.hex_distance(current_pos, target)
-            # Prioritize rewards by reducing their heuristic cost
+            # Favor rewards by reducing their heuristic cost
             if target in uncollected_rewards:
-                dist *= 0.5  # Strong preference for collecting rewards first
+                dist *= 0.5
             distances.append(dist)
         
-        # Estimate minimum cost considering current multipliers
         min_distance = min(distances) if distances else 0
         avg_distance = sum(distances) / len(distances) if distances else 0
         
-        # Strategic penalties and bonuses
+        # Penalty for high multipliers (bad state)
         strategy_cost = 0
-        
-        # Heavy penalty for high multipliers (encourages collecting rewards)
         if state.energy_multiplier > 1:
             strategy_cost += (state.energy_multiplier - 1) * 5
         if state.speed_multiplier > 1:
-            strategy_cost += (state.speed_multiplier - 1) * 3
-            
-        # Bonus for having good multipliers
+            strategy_cost += (state.speed_multiplier - 1) * 5
+        # Bonus for good multipliers
         if state.energy_multiplier < 1:
             strategy_cost -= (1 - state.energy_multiplier) * 2
         if state.speed_multiplier < 1:
@@ -193,18 +197,27 @@ class OptimizedTreasureHuntSolver:
         
         # Additional cost for remaining items
         remaining_cost = len(all_uncollected) * avg_distance * 0.3
+        # The reason for choosing 0.3 is to balance the heuristic with the actual cost of moving
         
         return min_distance + remaining_cost + strategy_cost
     
     def is_goal_state(self, state: GameState) -> bool:
-        """Goal: all treasures collected, rewards optional."""
+        """
+        Goal: all treasures collected (rewards are optional).
+        If TRAP4 was triggered, only check if enough treasures were collected.
+        """
         treasures_collected = (state.treasures_removed and 
                          len(state.collected_treasures) >= len(self.all_treasures)) or \
                          (state.collected_treasures == self.all_treasures)
         return treasures_collected
-        # ...existing code...
+
     def solve_optimized_astar(self) -> Optional[List[Tuple[int, int]]]:
-        """Optimized A* search with better heuristics and pruning"""
+        """
+        Main A* search loop:
+        - Uses a priority queue to expand the lowest-cost state.
+        - Avoids traps, collects treasures, and collects rewards if convenient.
+        - Returns the optimal path as a list of positions.
+        """
         start_state = GameState(
             position=self.grid.entry_point,
             collected_treasures=set(),
@@ -212,8 +225,8 @@ class OptimizedTreasureHuntSolver:
             energy_multiplier=1.0,
             speed_multiplier=1.0,
             last_direction=None,
-            total_energy=1.0,
-            total_steps=1,  # Count the initial step
+            total_energy=1.0,   # Count the initial tile's energy
+            total_steps=1,      # Count the initial tile's step
             treasures_removed=False
         )
         
@@ -223,7 +236,7 @@ class OptimizedTreasureHuntSolver:
         # Priority queue: (f_score, g_score, state, path)
         open_set = [(self.heuristic(start_state), 0, start_state, [start_state.position])]
         
-        # Better state tracking - only keep best score for each state configuration
+        # Track best cost for each unique state to avoid redundant work
         best_scores = {}
         
         iterations = 0
@@ -237,7 +250,7 @@ class OptimizedTreasureHuntSolver:
             
             f_score, g_score, current_state, path = heapq.heappop(open_set)
             
-            # Create state key for tracking
+            # Create a unique key for the state for pruning
             state_key = (
                 current_state.position,
                 tuple(sorted(current_state.collected_treasures)),
@@ -247,13 +260,14 @@ class OptimizedTreasureHuntSolver:
                 current_state.treasures_removed
             )
             
-            # Skip if we've seen this state with better cost
+            # Skip if we've seen this state with a better or equal cost
             total_cost = current_state.total_energy + current_state.total_steps
             if state_key in best_scores and best_scores[state_key] <= total_cost:
                 continue
                 
             best_scores[state_key] = total_cost
             
+            # Check if goal is reached
             if self.is_goal_state(current_state):
                 print("Optimized solution found!")
                 print(f"Total energy: {current_state.total_energy:.2f}")
@@ -263,7 +277,7 @@ class OptimizedTreasureHuntSolver:
                 print(f"Iterations: {iterations}")
                 return path
             
-            # Generate next states
+            # Expand all valid moves from current state
             for (next_row, next_col), energy_cost, steps_cost in self.get_valid_moves(current_state):
                 new_state = copy.deepcopy(current_state)
                 new_state.position = (next_row, next_col)
@@ -274,7 +288,7 @@ class OptimizedTreasureHuntSolver:
                 
                 cell_type = self.grid.get_cell(next_row, next_col)
                 
-                # Handle cell effects
+                # Collect treasures/rewards if on this cell
                 if cell_type == CellType.TREASURE and (next_row, next_col) not in new_state.collected_treasures:
                     new_state.collected_treasures.add((next_row, next_col))
                 elif cell_type in [CellType.REWARD1, CellType.REWARD2] and (next_row, next_col) not in new_state.collected_rewards:
@@ -286,8 +300,8 @@ class OptimizedTreasureHuntSolver:
                 new_g_score = new_state.total_energy + new_state.total_steps
                 new_f_score = new_g_score + self.heuristic(new_state)
                 
-                # Pruning: skip if this path is getting too expensive
-                if new_g_score > 50:  # Reasonable upper bound
+                # Prune paths that are too expensive
+                if new_g_score > 50:  # Arbitrary upper bound for cost
                     continue
                 
                 new_path = path + [(next_row, next_col)]
@@ -297,7 +311,7 @@ class OptimizedTreasureHuntSolver:
         return None
     
     def validate_path(self, path: List[Tuple[int, int]]) -> bool:
-        """Validate that path doesn't pass through obstacles"""
+        """Validate that path doesn't pass through obstacles and only moves to neighbors"""
         for i in range(len(path)-1):
             current = path[i]
             next_pos = path[i+1]
@@ -309,6 +323,7 @@ class OptimizedTreasureHuntSolver:
                 return False
         return True
 
+# Class representing the hexagonal grid and its contents
 class HexGrid:
     def __init__(self, width: int, height: int):
         self.width = width
@@ -319,6 +334,7 @@ class HexGrid:
         self.entry_point = (0, 0)
         
     def set_cell(self, row: int, col: int, cell_type: CellType):
+        """Set the type of a cell and update treasures/rewards/entry as needed"""
         if 0 <= row < self.height and 0 <= col < self.width:
             self.grid[row][col] = cell_type
             if cell_type == CellType.TREASURE:
@@ -329,12 +345,16 @@ class HexGrid:
                 self.entry_point = (row, col)
     
     def get_cell(self, row: int, col: int) -> CellType:
+        """Get the type of a cell, or OBSTACLE if out of bounds"""
         if 0 <= row < self.height and 0 <= col < self.width:
             return self.grid[row][col]
         return CellType.OBSTACLE
     
     def get_hex_neighbors(self, row: int, col: int) -> List[Tuple[int, int]]:
-        """Get hexagonal neighbors for even-columns-higher layout"""
+        """
+        Get neighboring cells for a given cell in a hex grid.
+        Uses even-q offset coordinates for hex layout.
+        """
         neighbors = []
         
         if col % 2 == 0:  # Even column (higher)
@@ -357,6 +377,7 @@ class HexGrid:
         
         return neighbors
 
+# Class for drawing the grid and the solution path using Pygame
 class HexVisualizer:
     def __init__(self, grid: HexGrid):
         self.grid = grid
@@ -364,14 +385,14 @@ class HexVisualizer:
         pygame.display.set_caption("Optimized Hexagonal Treasure Hunt - A* Pathfinding")
         
     def hex_to_pixel(self, row: int, col: int) -> Tuple[float, float]:
-        """Convert hex coordinates to pixel coordinates"""
+        """Convert hex grid coordinates to pixel coordinates for drawing"""
         x = HEX_RADIUS * 3/2 * col + 100
         y = HEX_RADIUS * math.sqrt(3) * (row - 0.5 * (col % 2)) + 100
         return x, y
     
     def draw_hexagon(self, surface, center: Tuple[float, float], color: Tuple[int, int, int], 
                     outline_color: Tuple[int, int, int] = None):
-        """Draw a hexagon at the given center"""
+        """Draw a single hexagon at the given center position"""
         points = []
         for i in range(6):
             angle = math.pi / 3 * i
@@ -384,7 +405,7 @@ class HexVisualizer:
             pygame.draw.polygon(surface, outline_color, points, 2)
     
     def draw_grid(self, path: List[Tuple[int, int]] = None, show_move_numbers: bool = False):
-        """Draw grid with path"""
+        """Draw the entire grid, and optionally the solution path with step numbers"""
         self.screen.fill(COLORS['WHITE'])
         font = pygame.font.Font(None, 20)
         
@@ -399,7 +420,7 @@ class HexVisualizer:
         if path:
             path_points = []
             
-            # Draw path segments
+            # Draw path segments and step numbers
             for i in range(len(path)):
                 row, col = path[i]
                 center = self.hex_to_pixel(row, col)
@@ -408,14 +429,14 @@ class HexVisualizer:
                 # Highlight path cells
                 self.draw_hexagon(self.screen, center, COLORS['CYAN'], COLORS['BLUE'])
                 
-                # Draw move numbers (steps)
+                # Draw move numbers (steps), starting from 1 for the initial tile
                 if show_move_numbers:
-                    step_num = str(i + 1)  # Start from 1 for initial tile
+                    step_num = str(i + 1)
                     text = font.render(step_num, True, COLORS['BLACK'])
                     text_rect = text.get_rect(center=center)
                     self.screen.blit(text, text_rect)
             
-            # Draw connecting lines
+            # Draw connecting lines between path points
             if len(path_points) > 1:
                 for i in range(len(path_points)-1):
                     pygame.draw.line(self.screen, COLORS['BLUE'], path_points[i], path_points[i+1], 3)
@@ -423,7 +444,7 @@ class HexVisualizer:
         self.draw_legend()
         
     def get_cell_color(self, cell_type: CellType) -> Tuple[int, int, int]:
-        """Get color for each cell type"""
+        """Get color for each cell type for drawing"""
         color_map = {
             CellType.EMPTY: COLORS['WHITE'],
             CellType.OBSTACLE: COLORS['BLACK'],
@@ -439,7 +460,7 @@ class HexVisualizer:
         return color_map.get(cell_type, COLORS['WHITE'])
     
     def draw_legend(self):
-        """Draw legend explaining the symbols"""
+        """Draw a legend explaining the symbols/colors in the grid"""
         legend_items = [
             ("Entry", COLORS['GREEN']),
             ("Treasure", COLORS['YELLOW']),
@@ -461,6 +482,7 @@ class HexVisualizer:
             text_surface = font.render(text, True, COLORS['BLACK'])
             self.screen.blit(text_surface, (WINDOW_WIDTH - 170, y_offset + i * 30))
 
+# Function to create a sample world/grid for testing
 def create_sample_world() -> HexGrid:
     """Create corrected world with all rewards and treasures"""
     grid = HexGrid(GRID_WIDTH, GRID_HEIGHT)
@@ -503,8 +525,9 @@ def create_sample_world() -> HexGrid:
     
     return grid
 
+# Main function to run the solver and visualization
 def main():
-    # Initialize
+    # Initialize grid, solver, and visualizer
     grid = create_sample_world()
     solver = OptimizedTreasureHuntSolver(grid)
     visualizer = HexVisualizer(grid)
@@ -516,7 +539,7 @@ def main():
     print(f"Rewards at: {grid.rewards}")
     print()
     
-    # Solve with optimized algorithm
+    # Solve with optimized algorithm (A*)
     print("Solving with optimized A* algorithm...")
     print()
     solution_path = solver.solve_optimized_astar()
@@ -542,7 +565,7 @@ def main():
         print("No solution found!")
         return
     
-    # Visualization loop
+    # Visualization loop for Pygame window
     clock = pygame.time.Clock()
     show_solution = False
     running = True
@@ -555,11 +578,11 @@ def main():
                 if event.key == pygame.K_SPACE:
                     show_solution = not show_solution
         
-        # Draw appropriate view
+        # Draw grid and solution path (toggle with SPACE)
         if show_solution:
             visualizer.draw_grid(solution_path, show_move_numbers=True)
             font = pygame.font.Font(None, 36)
-            text = font.render(f"Optimized A* Solution: {len(solution_path)-1} moves", True, COLORS['BLACK'])
+            text = font.render(f"Optimized A* Solution: {len(solution_path)} moves", True, COLORS['BLACK'])
             visualizer.screen.blit(text, (20, 20))
         else:
             visualizer.draw_grid()
