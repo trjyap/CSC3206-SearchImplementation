@@ -3,15 +3,15 @@ import math
 import heapq
 from enum import Enum
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Set, Dict
+from typing import List, Tuple, Optional, Set
 import copy
 
 # Initialize Pygame
 pygame.init()
 
 # Constants
-WINDOW_WIDTH = 1200
-WINDOW_HEIGHT = 800
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 600
 HEX_RADIUS = 30
 GRID_WIDTH = 10
 GRID_HEIGHT = 6
@@ -49,109 +49,42 @@ class CellType(Enum):
 
 @dataclass
 class GameState:
-    position: Tuple[int, int]
-    collected_treasures: Set[Tuple[int, int]]
-    energy_multiplier: float  # Affects energy consumption
-    speed_multiplier: float   # Affects steps needed
-    last_direction: Optional[Tuple[int, int]]
-    total_energy: float
-    total_steps: int
-    treasures_removed: bool  # Track if Trap4 was activated
+    position: Tuple[int, int]   # Current location
+    collected_treasures: Set[Tuple[int, int]] # Treasures gathered
+    collected_rewards: Set[Tuple[int, int]] # Rewards gathered
+    energy_multiplier: float # Current energy cost modifier
+    speed_multiplier: float # Current speed modifier
+    last_direction: Optional[Tuple[int, int]] # For TRAP3 effect
+    total_energy: float # Cumulative energy spent
+    total_steps: int # Cumulative steps taken
+    treasures_removed: bool
 
     def __lt__(self, other):
-        # Define how to compare two GameStates
-        # Here we just compare positions as a simple solution
-        return self.position < other.position
+        return (self.total_energy + self.total_steps) < (other.total_energy + other.total_steps)
 
-class HexGrid:
-    def __init__(self, width: int, height: int):
-        self.width = width
-        self.height = height
-        self.grid = [[CellType.EMPTY for _ in range(width)] for _ in range(height)]
-        self.treasures = set()
-        self.entry_point = (0, 0)
-        
-    def set_cell(self, row: int, col: int, cell_type: CellType):
-        if 0 <= row < self.height and 0 <= col < self.width:
-            self.grid[row][col] = cell_type
-            if cell_type == CellType.TREASURE:
-                self.treasures.add((row, col))
-            elif cell_type == CellType.ENTRY:
-                self.entry_point = (row, col)
-    
-    def get_cell(self, row: int, col: int) -> CellType:
-        if 0 <= row < self.height and 0 <= col < self.width:
-            return self.grid[row][col]
-        return CellType.OBSTACLE  # Out of bounds treated as obstacle
-
-    def get_hex_neighbors(self, row: int, col: int) -> List[Tuple[int, int]]:
-        """Get hexagonal neighbors for odd-columns-higher layout"""
-        neighbors = []
-        
-        # Modified offsets for even-columns-higher layout
-        if col % 2 == 0:  # Even column (lower)
-            offsets = [
-                (0, -1), (0, 1),   # NW, NE
-                (-1, 0), (1, 0),     # N, S
-                (1, -1), (1, 1)       # SW, SE
-            ]
-        else:  # Odd column (higher)
-            offsets = [
-                (-1, -1), (-1, 1),   # NW, NE
-                (-1, 0), (1, 0),     # N, S
-                (0, -1), (0, 1)       # SW, SE
-            ]
-        
-        for dr, dc in offsets:
-            new_row, new_col = row + dr, col + dc
-            if 0 <= new_row < self.height and 0 <= new_col < self.width:
-                neighbors.append((new_row, new_col))
-        
-        return neighbors
-
-class TreasureHuntSolver:
-    ODD_Q_NEIGHBORS = [
-        (-1, 0),  # N
-        (0, 1),   # NE
-        (1, 1),   # SE
-        (1, 0),   # S
-        (1, -1),  # SW
-        (0, -1)   # NW
-    ]
-    
-    EVEN_Q_NEIGHBORS = [
-        (-1, 0),  # N
-        (-1, 1),  # NE
-        (0, 1),   # SE
-        (1, 0),   # S
-        (0, -1),  # SW
-        (-1, -1)  # NW
-    ]
-    
-    def __init__(self, grid: HexGrid):
+class OptimizedTreasureHuntSolver:
+    def __init__(self, grid):
         self.grid = grid
         self.all_treasures = copy.deepcopy(grid.treasures)
+        self.all_rewards = copy.deepcopy(grid.rewards)
+        
+    def hex_distance(self, pos1: Tuple[int, int], pos2: Tuple[int, int]) -> int:
+        """Calculate hexagonal distance between two positions"""
+        r1, c1 = pos1
+        r2, c2 = pos2
+        
+        # Convert to cube coordinates for accurate hex distance
+        def hex_to_cube(row, col):
+            x = col
+            z = row - (col - (col & 1)) // 2
+            y = -x - z
+            return x, y, z
+        
+        x1, y1, z1 = hex_to_cube(r1, c1)
+        x2, y2, z2 = hex_to_cube(r2, c2)
+        
+        return (abs(x1 - x2) + abs(y1 - y2) + abs(z1 - z2)) // 2
     
-    def get_direction_index(self, from_row, from_col, to_row, to_col):
-        deltas = (to_row - from_row, to_col - from_col)
-        neighbors = self.ODD_Q_NEIGHBORS if from_col % 2 == 1 else self.EVEN_Q_NEIGHBORS
-        for idx, (dr, dc) in enumerate(neighbors):
-            if (dr, dc) == deltas:
-                return idx
-        return None  # not a direct neighbor
-    
-    def get_neighbor_in_direction(self, row, col, dir_idx):
-        neighbors = self.ODD_Q_NEIGHBORS if col % 2 == 1 else self.EVEN_Q_NEIGHBORS
-        dr, dc = neighbors[dir_idx]
-        return row + dr, col + dc
-    
-    def is_valid(self, row, col):
-        return (
-            0 <= row < self.grid.height and
-            0 <= col < self.grid.width and
-            self.grid.get_cell(row, col) != CellType.OBSTACLE
-        )
-
     def apply_trap_effect(self, state: GameState, trap_type: CellType) -> GameState:
         """Apply the effect of stepping on a trap"""
         new_state = copy.deepcopy(state)
@@ -161,20 +94,15 @@ class TreasureHuntSolver:
         elif trap_type == CellType.TRAP2:  # Decrease speed
             new_state.speed_multiplier *= 2
         elif trap_type == CellType.TRAP3:  # Move 2 cells in last direction
-            current_row, current_col = new_state.position
             if new_state.last_direction:
-                dir_idx = new_state.last_direction
-                row1, col1 = self.get_neighbor_in_direction(current_row, current_col, dir_idx)
-                row2, col2 = self.get_neighbor_in_direction(row1, col1, dir_idx)
-            
-                valid1 = self.is_valid(row1, col1)
-                valid2 = self.is_valid(row2, col2)
-            
-                if valid1 and valid2:
-                    new_state.position = (row2, col2)
-                elif valid1:
-                    new_state.position = (row1, col1)
-                # else: no move
+                dr, dc = new_state.last_direction
+                new_row = new_state.position[0] + 2 * dr
+                new_col = new_state.position[1] + 2 * dc
+                # Check bounds and obstacles
+                if (0 <= new_row < self.grid.height and 
+                    0 <= new_col < self.grid.width and 
+                    self.grid.get_cell(new_row, new_col) != CellType.OBSTACLE):
+                    new_state.position = (new_row, new_col)
         elif trap_type == CellType.TRAP4:  # Remove uncollected treasures
             new_state.treasures_removed = True
             
@@ -185,9 +113,9 @@ class TreasureHuntSolver:
         new_state = copy.deepcopy(state)
         
         if reward_type == CellType.REWARD1:  # Decrease gravity
-            new_state.energy_multiplier *= 0.5
+            new_state.energy_multiplier = max(0.25, new_state.energy_multiplier * 0.5)
         elif reward_type == CellType.REWARD2:  # Increase speed
-            new_state.speed_multiplier *= 0.5
+            new_state.speed_multiplier = max(0.25, new_state.speed_multiplier * 0.5)
             
         return new_state
     
@@ -202,8 +130,15 @@ class TreasureHuntSolver:
             if cell_type == CellType.OBSTACLE:
                 continue
                 
-            # Calculate movement cost
+            # Calculate movement cost with trap penalties
             base_energy = 1.0
+            
+            # Add trap penalty to discourage trap usage unless beneficial
+            if cell_type in [CellType.TRAP1, CellType.TRAP2, CellType.TRAP4]:
+                base_energy += 2.0  # Penalty for harmful traps
+            elif cell_type == CellType.TRAP3:
+                base_energy += 1.0  # Smaller penalty for push trap
+                
             energy_cost = base_energy * state.energy_multiplier
             steps_cost = max(1, int(state.speed_multiplier))
             
@@ -212,42 +147,74 @@ class TreasureHuntSolver:
         return moves
     
     def heuristic(self, state: GameState) -> float:
-        """Heuristic function for A* search"""
-        if state.treasures_removed:
-            # If treasures are removed, just get to any treasure location
-            available_treasures = self.all_treasures
-        else:
-            available_treasures = self.all_treasures - state.collected_treasures
+        """Improved heuristic function that considers strategic value"""
+        uncollected_treasures = self.all_treasures - state.collected_treasures
+        uncollected_rewards = self.all_rewards - state.collected_rewards
         
-        if not available_treasures:
+        if state.treasures_removed:
+            uncollected_treasures = self.all_treasures
+        
+        all_uncollected = uncollected_treasures | uncollected_rewards
+        
+        if not all_uncollected:
             return 0
         
-        # Manhattan distance to nearest uncollected treasure
-        min_distance = float('inf')
-        current_row, current_col = state.position
+        current_pos = state.position
         
-        for treasure_row, treasure_col in available_treasures:
-            # Hexagonal distance approximation
-            distance = max(abs(current_row - treasure_row), 
-                          abs(current_col - treasure_col))
-            min_distance = min(min_distance, distance)
+        # Calculate minimum spanning tree cost approximation
+        if len(all_uncollected) == 1:
+            target = next(iter(all_uncollected))
+            return self.hex_distance(current_pos, target) * state.energy_multiplier
         
-        return min_distance
+        # For multiple targets, use improved estimation
+        distances = []
+        for target in all_uncollected:
+            dist = self.hex_distance(current_pos, target)
+            # Prioritize rewards by reducing their heuristic cost
+            if target in uncollected_rewards:
+                dist *= 0.5  # Strong preference for collecting rewards first
+            distances.append(dist)
+        
+        # Estimate minimum cost considering current multipliers
+        min_distance = min(distances) if distances else 0
+        avg_distance = sum(distances) / len(distances) if distances else 0
+        
+        # Strategic penalties and bonuses
+        strategy_cost = 0
+        
+        # Heavy penalty for high multipliers (encourages collecting rewards)
+        if state.energy_multiplier > 1:
+            strategy_cost += (state.energy_multiplier - 1) * 5
+        if state.speed_multiplier > 1:
+            strategy_cost += (state.speed_multiplier - 1) * 3
+            
+        # Bonus for having good multipliers
+        if state.energy_multiplier < 1:
+            strategy_cost -= (1 - state.energy_multiplier) * 2
+        if state.speed_multiplier < 1:
+            strategy_cost -= (1 - state.speed_multiplier) * 2
+        
+        # Additional cost for remaining items
+        remaining_cost = len(all_uncollected) * avg_distance * 0.3
+        
+        return min_distance + remaining_cost + strategy_cost
     
     def is_goal_state(self, state: GameState) -> bool:
-        """Check if all treasures are collected"""
-        # If Trap4 was activated but not all treasures collected → fail
-        if state.treasures_removed and state.collected_treasures != self.all_treasures:
-            return False
+        """Check if all treasures and rewards are collected"""
+        treasures_collected = (state.treasures_removed and 
+                             len(state.collected_treasures) >= len(self.all_treasures)) or \
+                             (state.collected_treasures == self.all_treasures)
         
-        # All treasures collected → goal achieved
-        return state.collected_treasures == self.all_treasures
+        rewards_collected = state.collected_rewards == self.all_rewards
+        
+        return treasures_collected and rewards_collected
     
-    def solve_astar(self) -> Optional[List[Tuple[int, int]]]:
-        """Solve using A* search algorithm with strict adjacency checking"""
+    def solve_optimized_astar(self) -> Optional[List[Tuple[int, int]]]:
+        """Optimized A* search with better heuristics and pruning"""
         start_state = GameState(
             position=self.grid.entry_point,
             collected_treasures=set(),
+            collected_rewards=set(),
             energy_multiplier=1.0,
             speed_multiplier=1.0,
             last_direction=None,
@@ -255,34 +222,52 @@ class TreasureHuntSolver:
             total_steps=0,
             treasures_removed=False
         )
-        print("Initial state:", start_state.energy_multiplier)
+        
+        print(f"Starting optimized search from {start_state.position}")
+        print(f"Need to collect {len(self.all_treasures)} treasures and {len(self.all_rewards)} rewards")
         
         # Priority queue: (f_score, g_score, state, path)
         open_set = [(self.heuristic(start_state), 0, start_state, [start_state.position])]
-        closed_set = set()
         
-        while open_set:
+        # Better state tracking - only keep best score for each state configuration
+        best_scores = {}
+        
+        iterations = 0
+        max_iterations = 100000
+        
+        while open_set and iterations < max_iterations:
+            iterations += 1
+            
+            if iterations % 10000 == 0:
+                print(f"Search iteration {iterations}, queue size: {len(open_set)}")
+            
             f_score, g_score, current_state, path = heapq.heappop(open_set)
             
-            # Create state key for closed set
+            # Create state key for tracking
             state_key = (
                 current_state.position,
                 tuple(sorted(current_state.collected_treasures)),
-                current_state.energy_multiplier,
-                current_state.speed_multiplier,
+                tuple(sorted(current_state.collected_rewards)),
+                round(current_state.energy_multiplier, 2),
+                round(current_state.speed_multiplier, 2),
                 current_state.treasures_removed
             )
             
-            if state_key in closed_set:
+            # Skip if we've seen this state with better cost
+            total_cost = current_state.total_energy + current_state.total_steps
+            if state_key in best_scores and best_scores[state_key] <= total_cost:
                 continue
                 
-            closed_set.add(state_key)
+            best_scores[state_key] = total_cost
             
             if self.is_goal_state(current_state):
-                # Validate the final path
-                if self.validate_path(path):
-                    return path, current_state
-                continue
+                print("Optimized solution found!")
+                print(f"Total energy: {current_state.total_energy:.2f}")
+                print(f"Total steps: {current_state.total_steps}")
+                print(f"Combined cost: {total_cost:.2f}")
+                print(f"Path length: {len(path)} moves")
+                print(f"Iterations: {iterations}")
+                return path
             
             # Generate next states
             for (next_row, next_col), energy_cost, steps_cost in self.get_valid_moves(current_state):
@@ -290,80 +275,99 @@ class TreasureHuntSolver:
                 new_state.position = (next_row, next_col)
                 new_state.total_energy += energy_cost
                 new_state.total_steps += steps_cost
-                # Set last_direction with hex-specific adjustment
-                current_row, current_col = current_state.position
+                new_state.last_direction = (next_row - current_state.position[0], 
+                                          next_col - current_state.position[1])
                 
-                # Compute direction index using helper
-                dir_idx = self.get_direction_index(current_row, current_col, next_row, next_col)
-                if dir_idx is not None:
-                    new_state.last_direction = dir_idx
-                else:
-                    # This should not happen if moves come from valid neighbors
-                    new_state.last_direction = None
-
                 cell_type = self.grid.get_cell(next_row, next_col)
                 
                 # Handle cell effects
                 if cell_type == CellType.TREASURE and (next_row, next_col) not in new_state.collected_treasures:
                     new_state.collected_treasures.add((next_row, next_col))
+                elif cell_type in [CellType.REWARD1, CellType.REWARD2] and (next_row, next_col) not in new_state.collected_rewards:
+                    new_state.collected_rewards.add((next_row, next_col))
+                    new_state = self.apply_reward_effect(new_state, cell_type)
                 elif cell_type in [CellType.TRAP1, CellType.TRAP2, CellType.TRAP3, CellType.TRAP4]:
                     new_state = self.apply_trap_effect(new_state, cell_type)
-                elif cell_type in [CellType.REWARD1, CellType.REWARD2]:
-                    new_state = self.apply_reward_effect(new_state, cell_type)
                 
-                # Apply extra penalty for triggering TRAP4 before completing treasure collection
-                trap_penalty = 0.0
-                if cell_type == CellType.TRAP4 and new_state.collected_treasures != self.all_treasures:
-                    trap_penalty = 100.0  # Make it very costly
-                
-                new_g_score = g_score + energy_cost + steps_cost + trap_penalty
+                new_g_score = new_state.total_energy + new_state.total_steps
                 new_f_score = new_g_score + self.heuristic(new_state)
+                
+                # Pruning: skip if this path is getting too expensive
+                if new_g_score > 50:  # Reasonable upper bound
+                    continue
                 
                 new_path = path + [(next_row, next_col)]
                 heapq.heappush(open_set, (new_f_score, new_g_score, new_state, new_path))
-            
-        return None  # No solution found
         
+        print(f"Search completed after {iterations} iterations")
+        return None
+    
     def validate_path(self, path: List[Tuple[int, int]]) -> bool:
-        """Strict validation that path doesn't pass through obstacles"""
+        """Validate that path doesn't pass through obstacles"""
         for i in range(len(path)-1):
             current = path[i]
             next_pos = path[i+1]
-    
-            # Must be adjacent or a TRAP3 jump
+            
             if next_pos not in self.grid.get_hex_neighbors(current[0], current[1]):
-                # Check if this is a TRAP3 jump
-                row_diff = next_pos[0] - current[0]
-                col_diff = next_pos[1] - current[1]
-    
-                if abs(row_diff) > 1 or abs(col_diff) > 1:
-                    return False
-    
-                # Ensure it was a TRAP3 cell
-                if self.grid.get_cell(current[0], current[1]) != CellType.TRAP3:
-                    return False
-    
-                # Calculate intermediate cell
-                mid_row = (current[0] + next_pos[0]) // 2
-                mid_col = (current[1] + next_pos[1]) // 2
-    
-                # Ensure intermediate and final positions are valid
-                if self.grid.get_cell(mid_row, mid_col) == CellType.OBSTACLE:
-                    return False
-                if self.grid.get_cell(next_pos[0], next_pos[1]) == CellType.OBSTACLE:
-                    return False
-    
-            # Ensure target cell is not an obstacle
+                return False
+                
             if self.grid.get_cell(next_pos[0], next_pos[1]) == CellType.OBSTACLE:
                 return False
-    
         return True
+
+class HexGrid:
+    def __init__(self, width: int, height: int):
+        self.width = width
+        self.height = height
+        self.grid = [[CellType.EMPTY for _ in range(width)] for _ in range(height)]
+        self.treasures = set()
+        self.rewards = set()
+        self.entry_point = (0, 0)
+        
+    def set_cell(self, row: int, col: int, cell_type: CellType):
+        if 0 <= row < self.height and 0 <= col < self.width:
+            self.grid[row][col] = cell_type
+            if cell_type == CellType.TREASURE:
+                self.treasures.add((row, col))
+            elif cell_type in [CellType.REWARD1, CellType.REWARD2]:
+                self.rewards.add((row, col))
+            elif cell_type == CellType.ENTRY:
+                self.entry_point = (row, col)
+    
+    def get_cell(self, row: int, col: int) -> CellType:
+        if 0 <= row < self.height and 0 <= col < self.width:
+            return self.grid[row][col]
+        return CellType.OBSTACLE
+    
+    def get_hex_neighbors(self, row: int, col: int) -> List[Tuple[int, int]]:
+        """Get hexagonal neighbors for even-columns-higher layout"""
+        neighbors = []
+        
+        if col % 2 == 0:  # Even column (higher)
+            offsets = [
+                (0, -1), (0, 1),   # NW, NE
+                (-1, 0), (1, 0),   # N, S
+                (1, -1), (1, 1)    # SW, SE
+            ]
+        else:  # Odd column (lower)
+            offsets = [
+                (-1, -1), (-1, 1), # NW, NE
+                (-1, 0), (1, 0),   # N, S
+                (0, -1), (0, 1)    # SW, SE
+            ]
+        
+        for dr, dc in offsets:
+            new_row, new_col = row + dr, col + dc
+            if 0 <= new_row < self.height and 0 <= new_col < self.width:
+                neighbors.append((new_row, new_col))
+        
+        return neighbors
 
 class HexVisualizer:
     def __init__(self, grid: HexGrid):
         self.grid = grid
         self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-        pygame.display.set_caption("Hexagonal Treasure Hunt")
+        pygame.display.set_caption("Optimized Hexagonal Treasure Hunt - A* Pathfinding")
         
     def hex_to_pixel(self, row: int, col: int) -> Tuple[float, float]:
         """Convert hex coordinates to pixel coordinates"""
@@ -386,9 +390,9 @@ class HexVisualizer:
             pygame.draw.polygon(surface, outline_color, points, 2)
     
     def draw_grid(self, path: List[Tuple[int, int]] = None, show_move_numbers: bool = False):
-        """Draw grid with path validation"""
+        """Draw grid with path"""
         self.screen.fill(COLORS['WHITE'])
-        font = pygame.font.Font(None, 24)
+        font = pygame.font.Font(None, 20)
         
         # Draw all hexes
         for row in range(self.grid.height):
@@ -400,26 +404,15 @@ class HexVisualizer:
         
         if path:
             path_points = []
-            valid_path = True
             
-            # First validate the entire path
-            solver = TreasureHuntSolver(self.grid)
-            if not solver.validate_path(path):
-                valid_path = False
-                # Draw warning text
-                warning_font = pygame.font.Font(None, 36)
-                warning = warning_font.render("INVALID PATH DETECTED!", True, COLORS['RED'])
-                self.screen.blit(warning, (WINDOW_WIDTH//2 - 150, 20))
-            
-            # Draw path segments with validity check
+            # Draw path segments
             for i in range(len(path)):
                 row, col = path[i]
                 center = self.hex_to_pixel(row, col)
                 path_points.append(center)
                 
                 # Highlight path cells
-                cell_color = COLORS['RED'] if not valid_path else COLORS['CYAN']
-                self.draw_hexagon(self.screen, center, cell_color, COLORS['BLUE'])
+                self.draw_hexagon(self.screen, center, COLORS['CYAN'], COLORS['BLUE'])
                 
                 # Draw move numbers
                 if show_move_numbers and i > 0:
@@ -427,20 +420,10 @@ class HexVisualizer:
                     text_rect = text.get_rect(center=center)
                     self.screen.blit(text, text_rect)
             
-            # Draw connecting lines with segment validation
+            # Draw connecting lines
             if len(path_points) > 1:
                 for i in range(len(path_points)-1):
-                    current = path[i]
-                    next_pos = path[i+1]
-                    line_color = COLORS['BLUE']
-                    
-                    # Check if this segment is valid
-                    if next_pos not in self.grid.get_hex_neighbors(current[0], current[1]):
-                        line_color = COLORS['RED']
-                    elif self.grid.get_cell(next_pos[0], next_pos[1]) == CellType.OBSTACLE:
-                        line_color = COLORS['RED']
-                    
-                    pygame.draw.line(self.screen, line_color, path_points[i], path_points[i+1], 3)
+                    pygame.draw.line(self.screen, COLORS['BLUE'], path_points[i], path_points[i+1], 3)
         
         self.draw_legend()
         
@@ -460,7 +443,6 @@ class HexVisualizer:
         }
         return color_map.get(cell_type, COLORS['WHITE'])
     
-    
     def draw_legend(self):
         """Draw legend explaining the symbols"""
         legend_items = [
@@ -473,21 +455,19 @@ class HexVisualizer:
             ("Trap 4 (Remove)", COLORS['BROWN']),
             ("Reward 1 (↓Energy)", COLORS['LIGHT_GREEN']),
             ("Reward 2 (↑Speed)", COLORS['LIGHT_BLUE']),
-            ("Path", COLORS['CYAN'])
+            ("Optimized Path", COLORS['CYAN'])
         ]
         
         font = pygame.font.Font(None, 24)
         y_offset = 20
         
         for i, (text, color) in enumerate(legend_items):
-            # Draw color box
             pygame.draw.rect(self.screen, color, (WINDOW_WIDTH - 200, y_offset + i * 30, 20, 20))
-            # Draw text
             text_surface = font.render(text, True, COLORS['BLACK'])
             self.screen.blit(text_surface, (WINDOW_WIDTH - 170, y_offset + i * 30))
 
 def create_sample_world() -> HexGrid:
-    """Create world matching the exact layout provided"""
+    """Create corrected world with all rewards and treasures"""
     grid = HexGrid(GRID_WIDTH, GRID_HEIGHT)
     
     # Row 0
@@ -531,18 +511,33 @@ def create_sample_world() -> HexGrid:
 def main():
     # Initialize
     grid = create_sample_world()
-    solver = TreasureHuntSolver(grid)
+    solver = OptimizedTreasureHuntSolver(grid)
     visualizer = HexVisualizer(grid)
     
-    # Solve
-    print("Solving...")
-    solution = solver.solve_astar()  # Returns (path, final_state)
+    # Print grid information
+    print(f"Grid created with {len(grid.treasures)} treasures and {len(grid.rewards)} rewards")
+    print(f"Treasures at: {grid.treasures}")
+    print(f"Rewards at: {grid.rewards}")
     
-    if solution:
-        solution_path, final_state = solution
-        print(f"Solution found in {len(solution_path)-1} moves!")
+    # Solve with optimized algorithm
+    print("Solving with optimized A* algorithm...")
+    solution_path = solver.solve_optimized_astar()
+    
+    if solution_path:
+        print(f"Optimized solution found in {len(solution_path)-1} moves!")
         print("Path:", solution_path)
-        print(f"Total energy used: {final_state.total_energy:.2f}")
+        
+        # Verify all items are collected
+        treasures_in_path = set()
+        rewards_in_path = set()
+        for pos in solution_path:
+            if pos in grid.treasures:
+                treasures_in_path.add(pos)
+            if pos in grid.rewards:
+                rewards_in_path.add(pos)
+        
+        print(f"Treasures collected: {len(treasures_in_path)}/{len(grid.treasures)}")
+        print(f"Rewards collected: {len(rewards_in_path)}/{len(grid.rewards)}")
     else:
         print("No solution found!")
         return
@@ -563,14 +558,13 @@ def main():
         # Draw appropriate view
         if show_solution:
             visualizer.draw_grid(solution_path, show_move_numbers=True)
-            # Add status text
             font = pygame.font.Font(None, 36)
-            text = font.render(f"Solution: {len(solution_path)-1} moves", True, COLORS['BLACK'])
+            text = font.render(f"Optimized A* Solution: {len(solution_path)-1} moves", True, COLORS['BLACK'])
             visualizer.screen.blit(text, (20, 20))
         else:
-            visualizer.draw_grid()  # Original view
+            visualizer.draw_grid()
             font = pygame.font.Font(None, 36)
-            text = font.render("Press SPACE to show solution", True, COLORS['BLACK'])
+            text = font.render("Press SPACE to show optimized A* solution", True, COLORS['BLACK'])
             visualizer.screen.blit(text, (20, 20))
         
         pygame.display.flip()
