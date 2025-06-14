@@ -17,10 +17,3 @@ Install Pygame via pip:
 ```bash
 python3 -m pip install -U pygame==2.6.0`
 ```
-
-### Hexmap Module
-The Hexmap module is not available on PyPI. You can find the source files here:
-
-👉 https://github.com/AurelWu/HexMapLibrary
-
-Clone or download the repository and place the necessary files in your project directory (or ensure they are on your Python path).
