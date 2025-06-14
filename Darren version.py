@@ -510,15 +510,19 @@ def main():
     visualizer = HexVisualizer(grid)
     
     # Print grid information
+    print("=============================================================================")
     print(f"Grid created with {len(grid.treasures)} treasures and {len(grid.rewards)} rewards")
     print(f"Treasures at: {grid.treasures}")
     print(f"Rewards at: {grid.rewards}")
+    print()
     
     # Solve with optimized algorithm
     print("Solving with optimized A* algorithm...")
+    print()
     solution_path = solver.solve_optimized_astar()
     
     if solution_path:
+        print("=============================================================================")
         print(f"Optimized solution found in {len(solution_path)} moves!")  # Include start tile
         print("Path:", solution_path)
         
