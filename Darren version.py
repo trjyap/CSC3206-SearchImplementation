@@ -519,7 +519,7 @@ def main():
     solution_path = solver.solve_optimized_astar()
     
     if solution_path:
-        print(f"Optimized solution found in {len(solution_path)} steps!")  # Include start tile
+        print(f"Optimized solution found in {len(solution_path)} moves!")  # Include start tile
         print("Path:", solution_path)
         
         # Verify all items are collected
