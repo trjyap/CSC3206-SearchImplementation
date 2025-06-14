@@ -202,7 +202,7 @@ class OptimizedTreasureHuntSolver:
                          len(state.collected_treasures) >= len(self.all_treasures)) or \
                          (state.collected_treasures == self.all_treasures)
         return treasures_collected
-    
+        # ...existing code...
     def solve_optimized_astar(self) -> Optional[List[Tuple[int, int]]]:
         """Optimized A* search with better heuristics and pruning"""
         start_state = GameState(
@@ -212,8 +212,8 @@ class OptimizedTreasureHuntSolver:
             energy_multiplier=1.0,
             speed_multiplier=1.0,
             last_direction=None,
-            total_energy=0.0,
-            total_steps=0,
+            total_energy=1.0,
+            total_steps=1,  # Count the initial step
             treasures_removed=False
         )
         
@@ -408,9 +408,10 @@ class HexVisualizer:
                 # Highlight path cells
                 self.draw_hexagon(self.screen, center, COLORS['CYAN'], COLORS['BLUE'])
                 
-                # Draw move numbers
-                if show_move_numbers and i > 0:
-                    text = font.render(str(i), True, COLORS['BLACK'])
+                # Draw move numbers (steps)
+                if show_move_numbers:
+                    step_num = str(i + 1)  # Start from 1 for initial tile
+                    text = font.render(step_num, True, COLORS['BLACK'])
                     text_rect = text.get_rect(center=center)
                     self.screen.blit(text, text_rect)
             
@@ -518,7 +519,7 @@ def main():
     solution_path = solver.solve_optimized_astar()
     
     if solution_path:
-        print(f"Optimized solution found in {len(solution_path)-1} moves!")
+        print(f"Optimized solution found in {len(solution_path)} moves!")  # Include start tile
         print("Path:", solution_path)
         
         # Verify all items are collected
@@ -531,7 +532,8 @@ def main():
                 rewards_in_path.add(pos)
         
         print(f"Treasures collected: {len(treasures_in_path)}/{len(grid.treasures)}")
-        print(f"Rewards collected: {len(rewards_in_path)}/{len(grid.rewards)}")
+        print(f"Rewards collected (on path): {len(rewards_in_path)}/{len(grid.rewards)}")
+        print(f"Total steps (including start): {len(solution_path)}")
     else:
         print("No solution found!")
         return
